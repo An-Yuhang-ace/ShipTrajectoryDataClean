@@ -21,8 +21,8 @@ import java.util.List;
  * 设定长度阈值，将长度长于阈值的轨迹点输出至csv文件中。
  *
  * @author An Yuhang
- * @version 2.0
- * @date 2021/2/28 15:41
+ * @version 3.0
+ * @date 2021/4/2 15:41
  */
 public class AbnormalDataDetection {
 
@@ -36,14 +36,14 @@ public class AbnormalDataDetection {
         List<TrajectoryPoint> trajectory = new ArrayList<>();
         try {
             //读取csv文件
-            BufferedReader reader = new BufferedReader(new FileReader("test.csv"));
+            BufferedReader reader = new BufferedReader(new FileReader("ship_log_trajectory.csv"));
             //读第一行
             String line = reader.readLine();
             TrajectoryPoint t = new TrajectoryPoint(line);
             trajectory.add(t);
             TrajectoryPoint prior = t;
             //分段点阈值，时间间隔大于该值的点将被视为分段点，单位s。
-            int breakThreshold = 60;
+            int breakThreshold = 20;
             while((line=reader.readLine())!=null ){
                 //按行读取文件中的航迹信息，根据mmsi将其构建为轨迹序列
                 if (line.equals("")) {
@@ -70,11 +70,16 @@ public class AbnormalDataDetection {
                         continue;
                     }
                     else if (t.time < prior.time){
-                        trajectory.remove(trajectory.size()-1);
-                        prior = trajectory.get(trajectory.size()-1);
-                        t.deltatime = t.time - prior.time;
-                        t.deltalng = t.lng - prior.lng;
-                        t.deltalat = t.lat - prior.lat;
+                        if (trajectory.size() > 1){
+                            trajectory.remove(trajectory.size()-1);
+                            prior = trajectory.get(trajectory.size()-1);
+                            t.deltatime = t.time - prior.time;
+                            t.deltalng = t.lng - prior.lng;
+                            t.deltalat = t.lat - prior.lat;
+                        }
+                        else{
+                            continue;
+                        }
                     }
                     prior = t;
                     trajectory.add(t);
@@ -103,7 +108,7 @@ public class AbnormalDataDetection {
 
 
     /**
-     * 用分箱法检测轨迹序列中的偏移轨迹点（离群点），用线性插补进行修复。
+     * 用分箱法检测轨迹序列中的偏移轨迹点（离群点），由于离群点会造成麻烦的影响，我们直接将其设为断点。
      *
      * @param trajectory the trajectory
      */
@@ -115,7 +120,7 @@ public class AbnormalDataDetection {
             TrajectoryPoint[] bin = new TrajectoryPoint[binWidth];
             //依次将轨迹点装箱，并进行异常检测和修复
             double latSum = 0.0, lngSum = 0.0;
-            for (int j = 0; j < binWidth && index < trajectory.size(); index++, j++){
+            for (int j = 0; j < binWidth && index < trajectory.size(); j++, index++){
                 bin[j] = trajectory.get(index);
                 latSum += bin[j].lat;
                 lngSum += bin[j].lng;
@@ -138,41 +143,29 @@ public class AbnormalDataDetection {
             //进行异常漂移点检测
             for(int j = 0; j < binWidth; j++){
                 if (bin[j]!= null &&
-                   (threeSigmaDetection(bin[j], latMean, lngMean, latSd, lngSd) || bin[j].deltalng > 0.1 || bin[j].deltalat > 0.05)){
+                   (threeSigmaDetection(bin[j], latMean, lngMean, latSd, lngSd) || tooBigDelta(bin[j]))){
                     //根据三西格马法则 或 绝对增量过大 判定为异常漂移点（离群点），进行修复
                     int position = index - binWidth + j;
-                    TrajectoryPoint pre = null, next = null;
+                    TrajectoryPoint next = null;
                     if (j != 0 && j != binWidth-1){
-                        pre = bin[j-1];
                         next = bin[j+1];
                     }
                     else if (position - 1 >= 0 && position + 1 < trajectory.size()){
-                        pre = trajectory.get(position - 1);
                         next = trajectory.get(position + 1);
                     }
-                    if (pre != null && next != null
-                    && !threeSigmaDetection(pre, latMean, lngMean, latSd, lngSd)
-                    && !threeSigmaDetection(next, latMean, lngMean, latSd, lngSd)){
-                        //前后点都存在且不是异常点，进行线性修补
-                        //TODO 论文里的是三次样条插值，暂时先写成线性，之后如果有必要再修改
-                        bin[j].lat = pre.lat + (next.lat - pre.lat) * (bin[j].time - pre.time) / (next.time - pre.time);
-                        bin[j].lng = pre.lng + (next.lng - pre.lng) * (bin[j].time - pre.time) / (next.time - pre.time);
-                        bin[j].sog = (pre.sog + next.sog) / 2;
-                        bin[j].cog = getAngle(pre.lat, pre.lng, next.lat, next.lng) ;
-                        bin[j].deltalat = bin[j].lat - pre.lat;
-                        bin[j].deltalng = bin[j].lng - pre.lng;
-                        next.deltalat = next.lat - bin[j].lat;
-                        next.deltalng = next.lng - bin[j].lng;
-                    }
-                    else{
-                        //不修补，删除该点，更新后点的增量数据
-                        if (next != null){
-                            next.deltatime = next.deltatime + bin[j].deltatime;
-                            next.deltalat = next.deltalat + bin[j].deltalat;
-                            next.deltalng = next.deltalng + bin[j].deltalng;
+                    if (next != null){
+                        next.deltatime = next.deltatime + bin[j].deltatime;
+                        next.deltalat = next.deltalat + bin[j].deltalat;
+                        next.deltalng = next.deltalng + bin[j].deltalng;
+                        if (next.deltatime > 30000){
+                            next.deltatime = 0;
+                            next.deltalat = 0.0;
+                            next.deltalng = 0.0;
                         }
-                        trajectory.remove(bin[j]);
                     }
+                    bin[j].deltatime = 0;
+                    bin[j].deltalat = 0.0;
+                    bin[j].deltalng = 0.0;
                 }
             }
         }
@@ -185,7 +178,19 @@ public class AbnormalDataDetection {
         else if (Math.abs(node.lng - lngMean) > 3  * lngSd){
             return true;
         }
-        else{
+        else {
+            return false;
+        }
+    }
+
+    private  static  boolean tooBigDelta(TrajectoryPoint node){
+        if (Math.abs(node.deltalat) > 0.002){
+            return true;
+        }
+        else if (Math.abs(node.deltalng) > 0.002){
+            return true;
+        }
+        else {
             return false;
         }
     }
@@ -224,14 +229,13 @@ public class AbnormalDataDetection {
 
     /**
      * 判断轨迹序列连续段的长度，长度长于阈值 threshold 的轨迹段写入csv文件中
-     * TODO 是否有必要判断轨迹是否稀疏
      *
      * @param trajectory the trajectory
      */
     public static void trajectoryWrite(List<TrajectoryPoint> trajectory){
         try{
-            File csv = new File("test_fix.csv");
-            int threshold = 20;
+            File csv = new File("Trajectory.csv");
+            int threshold = 60;
             BufferedWriter bw = new BufferedWriter(new FileWriter(csv, true));
             int count = 0;
             for (int i = 0; i < trajectory.size(); i++){

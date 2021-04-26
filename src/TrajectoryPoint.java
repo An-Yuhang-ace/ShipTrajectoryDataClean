@@ -35,10 +35,10 @@ public class TrajectoryPoint {
         }
         this.time = date.getTime();
         this.mmsi = line[1];
-        this.lng = Double.parseDouble(line[4]);
-        this.lat = Double.parseDouble(line[5]);
-        this.sog = Double.parseDouble(line[3]);
-        this.cog = Double.parseDouble(line[6]);
+        this.lng = Double.parseDouble(line[3]);
+        this.lat = Double.parseDouble(line[4]);
+        this.sog = Double.parseDouble(line[2]);
+        this.cog = Double.parseDouble(line[5]);
     }
 
 
